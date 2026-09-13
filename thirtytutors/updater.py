@@ -67,6 +67,21 @@ def installed_app_version() -> str:
     return _installed_app_version()
 
 
+def is_frozen_build() -> bool:
+    """True inside a packaged executable - PyInstaller sets `sys.frozen`
+    itself, and that covers both the plain Windows installer and the
+    Microsoft Store MSIX (which wraps the exact same PyInstaller build).
+    False for a normal `pip install thirtytutors` or an editable dev
+    checkout, where sys.executable is a real Python interpreter that
+    understands `-m <module>` and has pip available on it - neither of
+    which holds for a frozen exe. Used by check_app_update (a packaged
+    build has no pip-installable "app version" to offer an update for at
+    all - it updates through the Store/installer instead) and by
+    relaunch_app (which needs a different way to re-launch itself).
+    """
+    return bool(getattr(sys, "frozen", False))
+
+
 def _version_tuple(v: str) -> tuple:
     """Best-effort numeric parse ("0.3.1" -> (0, 3, 1)). Ignores any
     pre-release/build suffix - this app's own releases are plain X.Y.Z, so
@@ -109,6 +124,16 @@ def get_latest_pypi_version(timeout: float = 3.0) -> str | None:
 
 def check_app_update(timeout: float = 3.0) -> dict:
     current = _installed_app_version()
+    if is_frozen_build():
+        # A packaged build has nothing for this to install - it gets a new
+        # app version through the Store or a fresh installer download, not
+        # `pip install --upgrade`. Reporting update_available here would
+        # send the frontend into buildUpdateSteps' app-install step
+        # (run_pip_upgrade), which on a frozen exe doesn't upgrade
+        # anything - sys.executable is the exe itself, not a Python
+        # interpreter that understands `-m pip ...`, so that call was
+        # silently launching a second copy of the app instead.
+        return {"current": current, "latest": current, "update_available": False}
     latest = get_latest_pypi_version(timeout=timeout)
     return {
         "current": current,
@@ -121,6 +146,15 @@ def run_pip_upgrade() -> tuple[bool, str]:
     """Blocking - callers on the web app side must run this via
     asyncio.to_thread rather than await it directly on the event loop.
     """
+    if is_frozen_build():
+        # Shouldn't be reachable through the normal UI flow - check_app_update
+        # above never reports an app update available for a frozen build, so
+        # buildUpdateSteps (update.js) never includes this step for one. Kept
+        # as an explicit guard rather than assuming that holds, since
+        # sys.executable genuinely isn't a Python interpreter here and would
+        # otherwise just launch another copy of the app instead of failing
+        # loudly.
+        return False, "This packaged build updates through the Store/installer, not pip."
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--upgrade", PYPI_PROJECT],
@@ -198,11 +232,37 @@ def relaunch_app() -> None:
     Does NOT close this process's own window or exit this process - see
     close_this_window() below, called separately by the /api/restart-app
     handler right after this.
+
+    cwd is pinned to the user's home directory rather than inherited from
+    whatever directory this process happened to be started in. A repo
+    checkout with an editable (`pip install -e .`) install of this same
+    package sitting in it also has a `thirtytutors.egg-info/` folder right
+    at its root - if the relaunched child inherits that as its working
+    directory, `python -m thirtytutors` puts that directory first on
+    sys.path, and importlib.metadata finds THAT egg-info (whatever version
+    was current the last time `pip install -e .` ran) ahead of whatever
+    run_pip_upgrade() just installed into site-packages. Every relaunch
+    then reports the same pre-upgrade version again, `describeUpdate` in
+    update.js sees an update "still" pending, and maybeStartAutoUpdate
+    (which runs unprompted on every page load) immediately fires another
+    upgrade-and-relaunch - an update that already succeeded looks perpetually
+    unapplied and the app relaunches itself in a loop. A neutral cwd with no
+    egg-info of its own avoids the shadowing entirely, for both the frozen
+    and non-frozen branches below.
     """
     creationflags = 0
     start_new_session = False
     log_file = None
     env = dict(os.environ, PYTHONUTF8="1")
+    port = str(_free_port())
+    # A frozen build's sys.executable is the packaged exe itself, not a
+    # Python interpreter - it has no `-m` flag and no bundled pip, and
+    # desktop_entry.py (its actual entry point) is the thing that now
+    # parses --port directly rather than through `-m thirtytutors`.
+    if is_frozen_build():
+        argv = [sys.executable, "--port", port]
+    else:
+        argv = [sys.executable, "-m", "thirtytutors", "--port", port]
     if sys.platform == "win32":
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -221,7 +281,8 @@ def relaunch_app() -> None:
         start_new_session = True
     try:
         subprocess.Popen(
-            [sys.executable, "-m", "thirtytutors", "--port", str(_free_port())],
+            argv,
+            cwd=str(Path.home()),
             creationflags=creationflags,
             start_new_session=start_new_session,
             stdout=log_file,

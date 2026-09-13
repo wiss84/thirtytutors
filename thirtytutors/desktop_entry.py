@@ -18,13 +18,26 @@ PyInstaller runs this file standalone (not as part of the `thirtytutors`
 package), so a relative import (`from . import desktop`) fails at
 runtime with "attempted relative import with no known parent package" -
 use the absolute import below instead.
+
+--host/--port are parsed (rather than always using desktop.run()'s own
+defaults) so updater.relaunch_app() can hand this a fresh, OS-assigned
+port for the Update & Relaunch flow - without this, a relaunched packaged
+build always rebound the default port 8000 regardless of what the
+outgoing process was still holding, racing its shutdown instead of
+sidestepping it the way relaunch_app() intends.
 """
+
+import argparse
 
 from thirtytutors import desktop
 
 
 def main() -> None:
-    desktop.run()
+    parser = argparse.ArgumentParser(description="ThirtyTutors desktop app (packaged build)")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    desktop.run(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
