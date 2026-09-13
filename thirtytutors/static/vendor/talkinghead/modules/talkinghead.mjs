@@ -178,6 +178,7 @@ class TalkingHead {
       avatarOnly: false,
       avatarOnlyScene: null,
       avatarOnlyCamera: null,
+      disableHipFeetBalance: false,
       statsNode: null,
       statsStyle: null
     };
@@ -2658,15 +2659,24 @@ class TalkingHead {
       this.objectNeck.quaternion.multiply(q);
     }
 
-    // Hip-feet balance
-    box.setFromObject( this.armature );
-    this.objectLeftToeBase.getWorldPosition(v);
-    v.sub(this.armature.position);
-    this.objectRightToeBase.getWorldPosition(w);
-    w.sub(this.armature.position);
-    this.objectHips.position.y -= box.min.y / 2;
-    this.objectHips.position.x -= (v.x+w.x)/4;
-    this.objectHips.position.z -= (v.z+w.z)/2;
+    // Hip-feet balance - keeps a STATIONARY avatar's feet grounded by
+    // recentering Hips based on toe world-position deltas each frame.
+    // Not applicable to an avatar driven by an external locomotion
+    // system (a walking/running gait actively moves Hips on purpose;
+    // this correction fights that, and can compound frame over frame
+    // since it reacts to the very position it just adjusted) - skippable
+    // via opt.disableHipFeetBalance, defaulting to false so every
+    // existing use of this class keeps its current behavior.
+    if ( !this.opt.disableHipFeetBalance ) {
+      box.setFromObject( this.armature );
+      this.objectLeftToeBase.getWorldPosition(v);
+      v.sub(this.armature.position);
+      this.objectRightToeBase.getWorldPosition(w);
+      w.sub(this.armature.position);
+      this.objectHips.position.y -= box.min.y / 2;
+      this.objectHips.position.x -= (v.x+w.x)/4;
+      this.objectHips.position.z -= (v.z+w.z)/2;
+    }
 
     // Update Dynamic Bones
     this.dynamicbones.update(dt);

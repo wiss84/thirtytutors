@@ -132,3 +132,42 @@
   color: var(--text-muted);
   font-size: 0.72rem;
 }
+
+/* --- Language-name autocomplete dropdown (see languageAutocomplete.js) -
+   shared across /get-started, /avatar-select, and the Settings modal's
+   General tab, since all three load this file already (base.css/
+   topbar.css/modals.css/settings.css are loaded globally via index.html,
+   unlike each page's own extra stylesheet). The wrapper/dropdown are both
+   built by JS, not present in any page's own HTML. */
+
+.lang-autocomplete-wrap {
+  position: relative;
+}
+
+.lang-autocomplete-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 40;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+.lang-autocomplete-dropdown.visible { display: block; }
+
+.lang-autocomplete-item {
+  padding: 7px 10px;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.lang-autocomplete-item:hover,
+.lang-autocomplete-item.active {
+  background: var(--accent);
+  color: #fff;
+}

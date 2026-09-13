@@ -10,10 +10,54 @@ let activeBubbles = { mine: null, tutor: null };
 
 // --- Errors / status ---
 
+// tone: 'error' (failure) or 'info' (transient "still waiting" state).
+// retryable shows a Retry button - only true for an actual connection
+// failure (see websocket.js), never for the local validation messages
+// below (showError), where a reconnect wouldn't be the right action.
+// Pass no message to hide the toast.
+function showStatusToast(message, tone = 'error', retryable = false) {
+  if (!message) { hideStatusToast(); return; }
+  statusToastMessage.textContent = message;
+  statusToast.className = `visible ${tone}`;
+  statusToastRetryBtn.hidden = !retryable;
+}
+
+function hideStatusToast() {
+  statusToast.className = '';
+  statusToastMessage.textContent = '';
+  statusToastRetryBtn.hidden = true;
+}
+
+// connectWebSocket/reconnectTimer are declared in websocket.js - reachable
+// here directly since all these <script> files share one global scope
+// (see state.js's header comment). By the time a person can actually
+// click this button, every script has already loaded, so there's no
+// load-order issue even though websocket.js loads after this file.
+statusToastRetryBtn.addEventListener('click', () => {
+  hideStatusToast();
+  clearTimeout(reconnectTimer);
+  connectWebSocket();
+});
+
+// Backward-compatible wrapper for audio.js's local validation messages
+// (e.g. "finish the quiz first", "not connected yet") - always
+// non-retryable, since those aren't connection failures a Retry button
+// would make sense for.
 function showError(text) {
-  if (!text) { errorBanner.classList.remove('visible'); errorBanner.textContent = ''; return; }
-  errorBanner.textContent = text;
-  errorBanner.classList.add('visible');
+  showStatusToast(text, 'error', false);
+}
+
+// The "still waiting on the tutor" indicator (see live_session.py's
+// watchdog / the 'waiting_long' message) - a lighter-weight info toast,
+// separate from a real error so one arriving afterward isn't accidentally
+// suppressed: only clears the toast if it's still showing ITS OWN
+// message, not whatever a real error may have replaced it with since.
+function showWaitingIndicator(active) {
+  if (active) {
+    showStatusToast("Still waiting on the tutor - this can take a moment...", 'info', false);
+  } else if (statusToast.classList.contains('info')) {
+    hideStatusToast();
+  }
 }
 
 function setConnectionState(state) {
@@ -89,13 +133,21 @@ function renderHistoryBubble(who, text) {
 function renderConversationTranscript(turns) {
   finalizeTurnBubbles();
   transcriptArea.innerHTML = '';
-  if (!turns || turns.length === 0) {
+  // 'user' turns are stored (they still feed memory/summarization) but not
+  // rendered - see websocket.js's transcript_in handler for the matching
+  // change and the reasoning (unreliable transcription for the student's
+  // own speech). Filtered before the empty-state check, not after, so a
+  // conversation with only a user turn so far (e.g. disconnected before
+  // the tutor replied) still shows the empty-state message instead of a
+  // blank area.
+  const tutorTurns = (turns || []).filter((t) => t.role !== 'user');
+  if (tutorTurns.length === 0) {
     const fresh = document.createElement('div');
     fresh.id = 'emptyState';
     fresh.textContent = 'Hold the button below and start speaking.';
     transcriptArea.appendChild(fresh);
     return;
   }
-  turns.forEach((t) => renderHistoryBubble(t.role === 'user' ? 'mine' : 'tutor', t.text));
+  tutorTurns.forEach((t) => renderHistoryBubble('tutor', t.text));
   transcriptArea.scrollTop = transcriptArea.scrollHeight;
 }

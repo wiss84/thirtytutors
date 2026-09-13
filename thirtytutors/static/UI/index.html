@@ -22,7 +22,7 @@
 <link rel="icon" type="image/x-icon" href="/ThirtyTutors.ico" />
 <link rel="stylesheet" href="/UI/styles/base.css?v=2" />
   <link rel="stylesheet" href="/UI/styles/topbar.css?v=4" />
-  <link rel="stylesheet" href="/UI/styles/modals.css?v=2" />
+  <link rel="stylesheet" href="/UI/styles/modals.css?v=3" />
   <link rel="stylesheet" href="/UI/styles/settings.css?v=2" />
 {% block styles %}{% endblock %}
 </head>
@@ -80,13 +80,17 @@
     <p id="updateDetailStatus" class="update-dropdown-status"></p>
   </div>
 </div>
-<!-- Shown automatically (no click needed) only when the avatar/voice/photo
-     bundle has never been downloaded at all - see update.js's
-     maybeStartFirstRunSetup. Not closable: the app genuinely can't do
-     anything useful yet without these files. -->
+<!-- Shown automatically (no click needed) whenever ANY update is pending
+     at launch (app version, assets, or marketing assets - see update.js's
+     maybeStartAutoUpdate) - not just the one-time "assets never
+     downloaded at all" case, which is now just the specific wording this
+     picks when that's what's actually happening. Not closable: either the
+     app genuinely can't do anything useful yet (first run), or it's
+     already mid-download for an update that's about to relaunch it
+     anyway. -->
 <div id="firstRunOverlay">
   <div id="firstRunModal">
-    <h3>Setting up ThirtyTutors</h3>
+    <h3 id="firstRunTitle">Setting up ThirtyTutors</h3>
     <p id="firstRunMessage" class="update-dropdown-message">Downloading your 3D tutor avatars and voices - this only happens once. Make sure you're connected to the internet.</p>
     <div id="firstRunProgressWrap" class="update-progress-wrap" hidden>
       <div class="update-progress-track"><div id="firstRunProgressFill" class="update-progress-fill"></div></div>
@@ -96,12 +100,15 @@
   </div>
 </div>
 {% include "pages/_settings_modal.html" %}
+{% include "pages/_notes_modal.html" %}
 {% block modals %}{% endblock %}
 <script src="/UI/scripts/theme.js?v=2"></script>
 <script src="/UI/scripts/update.js?v=3"></script>
 <script src="/UI/scripts/profileMenu.js?v=2"></script>
 <script src="/UI/scripts/statsPane.js?v=2"></script>
-<script src="/UI/scripts/settings.js?v=3"></script>
+<script src="/UI/scripts/languageAutocomplete.js?v=1"></script>
+<script src="/UI/scripts/notes.js?v=1"></script>
+<script src="/UI/scripts/settings.js?v=4"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

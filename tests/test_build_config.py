@@ -14,8 +14,8 @@ supposed to.
 """
 
 from thirtytutors import live_session, quizzes
-from thirtytutors.tutor_instructions import SPACED_REPETITION_CONTEXT_TEMPLATE
-from thirtytutors.tutor_tools import QUIZ_TOOL
+from thirtytutors.tutor_instructions import SPACED_REPETITION_CONTEXT_TEMPLATE, TAUGHT_VOCAB_CONTEXT_TEMPLATE
+from thirtytutors.tutor_tools import build_quiz_tool
 
 
 def _minimal_profile():
@@ -77,11 +77,43 @@ def test_build_config_omits_spaced_repetition_block_with_empty_review_terms():
     assert "Trouble spots" not in _system_instruction_text(config)
 
 
+def test_build_config_omits_taught_vocab_block_without_taught_vocab():
+    config = live_session.build_config(_minimal_profile(), _minimal_conv_config(), "gemini-2.5-flash-native-audio-latest")
+    assert "Vocabulary already taught" not in _system_instruction_text(config)
+
+
+def test_build_config_includes_taught_vocab_block_with_taught_vocab():
+    taught_vocab = ["el clima", "sin embargo"]
+    config = live_session.build_config(
+        _minimal_profile(),
+        _minimal_conv_config(),
+        "gemini-2.5-flash-native-audio-latest",
+        taught_vocab=taught_vocab,
+    )
+    text = _system_instruction_text(config)
+    expected_block = TAUGHT_VOCAB_CONTEXT_TEMPLATE.format(name="Alex", terms=", ".join(taught_vocab))
+    assert expected_block in text
+
+
+def test_build_config_omits_taught_vocab_block_with_empty_taught_vocab():
+    config = live_session.build_config(
+        _minimal_profile(),
+        _minimal_conv_config(),
+        "gemini-2.5-flash-native-audio-latest",
+        taught_vocab=[],
+    )
+    assert "Vocabulary already taught" not in _system_instruction_text(config)
+
+
 # --- QUIZ_TOOL schema (design_plans/issues_fix.md: correct_answers omission) ---
 
 
 def _quiz_item_schema():
-    params = QUIZ_TOOL.function_declarations[0].parameters
+    # Structural shape only (required fields, item_type enum) - none of the
+    # tests using this depend on the actual language strings passed here,
+    # only on _CHOICES_DESC_TEMPLATE/etc. being filled in without error.
+    tool = build_quiz_tool(native_language="English", target_language="Spanish")
+    params = tool.function_declarations[0].parameters
     return params, params.properties["items"].items
 
 

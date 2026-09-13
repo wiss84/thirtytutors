@@ -5,7 +5,7 @@
 {% block styles %}
 <link rel="stylesheet" href="/UI/styles/sidebar.css?v=1" />
 <link rel="stylesheet" href="/UI/styles/modals.css?v=1" />
-<link rel="stylesheet" href="/UI/styles/avatar_select.css?v=1" />
+<link rel="stylesheet" href="/UI/styles/avatar_select.css?v=2" />
 {% endblock %}
 
 {% block content %}
@@ -19,6 +19,7 @@
     <div class="tutor-center">
       <h2 class="tutor-center-title">Choose Your Tutor Avatar</h2>
       <p class="tutor-center-subtitle">Click a face to preview them live, right here.</p>
+      <button id="watchAvatarSelectTutorialBtn" class="pill-btn avatar-select-tutorial-btn" type="button">▶ Watch a quick tutorial on starting a session</button>
       <div id="avatarPreviewFrame">
         <div id="avatarPreview"></div>
       </div>
@@ -57,6 +58,14 @@
     <button id="avatarNextBtn" class="primary-btn" type="button" disabled>Start Session</button>
   </div>
 </div>
+
+<div id="avatarSelectTutorialOverlay">
+  <div id="avatarSelectTutorialModal">
+    <h2>Starting a session walkthrough</h2>
+    <video id="avatarSelectTutorialVideo" src="/Create_new_session_tutorial.mp4" controls playsinline></video>
+    <button id="closeAvatarSelectTutorialBtn" class="pill-btn" type="button" style="width:100%; margin-top:14px;">Close</button>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -69,5 +78,5 @@
   }
 }
 </script>
-<script type="module" src="/UI/scripts/avatarSelect.js?v=1"></script>
+<script type="module" src="/UI/scripts/avatarSelect.js?v=3"></script>
 {% endblock %}

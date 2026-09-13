@@ -1,16 +1,17 @@
 """Read-only aggregation over existing memory.py/quizzes.py tables for the
 Settings modal's Stats tab, plus milestone-crossing detection for the
-notification bell. No new tracking tables here - the only genuinely new
-state is total_seconds_studied/last_active_date/current_streak/
-seen_milestones (profile fields, written by live_session.py and by
-get_new_milestones below); everything else in this module is computed
-fresh from turns/vocab_mistakes/quiz_sessions on every call rather than
-cached, since a self-hosted single-profile app never has enough rows for
-that to matter.
+notification bell. No new tracking tables here beyond memory.py's own
+profile_state table - the only genuinely new state is
+total_seconds_studied/last_active_date/current_streak/seen_milestones
+(memory.py's profile_state fields, written by live_session.py via
+memory.record_active_day/add_seconds_studied and by get_new_milestones
+below via memory.add_seen_milestones); everything else in this module is
+computed fresh from turns/vocab_mistakes/quiz_sessions on every call rather
+than cached, since a self-hosted single-profile app never has enough rows
+for that to matter.
 """
 
 from . import memory, quizzes
-from .profiles_store import patch_profile
 
 # A term counts as "mastered" once its correct_streak reaches this -
 # reuses memory.py's own threshold (the same one that retires a term from
@@ -97,7 +98,7 @@ def get_profile_stats(profile_id: str) -> dict:
     }
 
 
-def _compute_earned_milestones(stats: dict, profile: dict) -> list[dict]:
+def _compute_earned_milestones(stats: dict, state: dict) -> list[dict]:
     """Every milestone currently earned - vocab tiers per language plus the
     single highest day-streak tier reached. Each fires at most once ever
     for a given profile (see get_new_milestones), including a streak tier:
@@ -113,7 +114,7 @@ def _compute_earned_milestones(stats: dict, profile: dict) -> list[dict]:
             lang = bucket["target_language"]
             earned.append({"id": f"vocab:{lang}:{tier}", "message": f"{tier} words mastered in {lang}"})
 
-    streak = profile.get("current_streak") or 0
+    streak = state.get("current_streak") or 0
     reached = [t for t in STREAK_MILESTONE_TIERS if streak >= t]
     if reached:
         top = max(reached)
@@ -122,20 +123,22 @@ def _compute_earned_milestones(stats: dict, profile: dict) -> list[dict]:
     return earned
 
 
-def get_new_milestones(profile_id: str, profile: dict) -> list[dict]:
-    """Milestones earned but not yet recorded in profile['seen_milestones'].
-    Marks them seen as a side effect of being returned (appends their ids
-    to seen_milestones and saves) - same "surfaces once, then done" idea
-    as updater.mark_version_seen for the what's-new notification, just
+def get_new_milestones(profile_id: str) -> list[dict]:
+    """Milestones earned but not yet recorded in profile_state's
+    seen_milestones (memory.py). Marks them seen as a side effect of being
+    returned (merges their ids into seen_milestones via
+    memory.add_seen_milestones) - same "surfaces once, then done" idea as
+    updater.mark_version_seen for the what's-new notification, just
     triggered by this read itself rather than a dedicated detail page,
     since a milestone has no page of its own to visit - the Settings
     modal's Stats tab is where the underlying numbers live, not a one-off
     "you earned this" view.
     """
     stats = get_profile_stats(profile_id)
-    earned = _compute_earned_milestones(stats, profile)
-    seen = set(profile.get("seen_milestones") or [])
+    state = memory.get_profile_state(profile_id)
+    earned = _compute_earned_milestones(stats, state)
+    seen = set(state.get("seen_milestones") or [])
     new = [m for m in earned if m["id"] not in seen]
     if new:
-        patch_profile(profile_id, {"seen_milestones": sorted(seen | {m["id"] for m in new})})
+        memory.add_seen_milestones(profile_id, {m["id"] for m in new})
     return new

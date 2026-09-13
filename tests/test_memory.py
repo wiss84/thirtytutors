@@ -260,6 +260,55 @@ def test_review_candidates_respects_limit():
     assert len(memory.get_review_candidates(conv["id"], limit=2)) == 2
 
 
+# --- Taught vocab (get_taught_vocab) ---
+
+
+def test_taught_vocab_independent_of_review_streak():
+    # get_taught_vocab reads vocab_mistakes directly - unlike
+    # get_review_candidates (correct_streak<2), it doesn't care whether the
+    # term has ever been quizzed at all. A freshly taught term (streak 0,
+    # same as a missed one - upsert_vocab_mistake doesn't distinguish the
+    # two) still belongs on the "don't re-teach this" list.
+    conv = memory.create_conversation("profile-1", {"target_language": "Spanish"})
+    memory.upsert_vocab_mistake(conv["id"], "buenos d\u00edas", note="good morning")
+    assert memory.get_taught_vocab(conv["id"]) == ["buenos d\u00edas"]
+
+
+def test_taught_vocab_most_recent_first(monkeypatch):
+    # upsert_vocab_mistake stamps last_seen_ts at second resolution
+    # (int(time.time())), so three real back-to-back calls could tie and
+    # make the ordering assertion below flaky - monkeypatching time.time
+    # keeps this deterministic.
+    conv = memory.create_conversation("profile-1", {"target_language": "Spanish"})
+    clock = iter([100, 101, 102])
+    monkeypatch.setattr(memory.time, "time", lambda: next(clock))
+    memory.upsert_vocab_mistake(conv["id"], "uno")
+    memory.upsert_vocab_mistake(conv["id"], "dos")
+    memory.upsert_vocab_mistake(conv["id"], "uno")  # re-seen - should now sort after "dos"
+    assert memory.get_taught_vocab(conv["id"]) == ["uno", "dos"]
+
+
+def test_taught_vocab_respects_limit():
+    conv = memory.create_conversation("profile-1", {"target_language": "Spanish"})
+    for term in ["uno", "dos", "tres", "cuatro"]:
+        memory.upsert_vocab_mistake(conv["id"], term)
+    assert len(memory.get_taught_vocab(conv["id"], limit=2)) == 2
+
+
+def test_taught_vocab_empty_for_conversation_with_no_vocab():
+    conv = memory.create_conversation("profile-1", {"target_language": "Spanish"})
+    assert memory.get_taught_vocab(conv["id"]) == []
+
+
+def test_taught_vocab_scoped_to_conversation():
+    conv1 = memory.create_conversation("profile-1", {"target_language": "Spanish"})
+    conv2 = memory.create_conversation("profile-1", {"target_language": "French"})
+    memory.upsert_vocab_mistake(conv1["id"], "hola")
+    memory.upsert_vocab_mistake(conv2["id"], "bonjour")
+    assert memory.get_taught_vocab(conv1["id"]) == ["hola"]
+    assert memory.get_taught_vocab(conv2["id"]) == ["bonjour"]
+
+
 def test_init_db_migration_is_idempotent():
     # isolated_data_dir already calls init_db() once; calling it again here
     # exercises the ALTER TABLE ADD COLUMN path against a table that
@@ -285,3 +334,100 @@ def test_append_lesson_log_ignores_blank_note():
     conv = memory.create_conversation("profile-1", {"target_language": "Spanish"})
     memory.append_lesson_log(conv["id"], "  ")
     assert memory.get_lesson_log(conv["id"]) == []
+
+
+# --- Profile state (stats/streak/milestones) ---
+
+
+def test_get_profile_state_returns_defaults_for_unknown_profile():
+    assert memory.get_profile_state("no-such-profile") == {
+        "total_seconds_studied": 0,
+        "last_active_date": None,
+        "current_streak": 0,
+        "seen_milestones": [],
+        "last_auto_backup_at": None,
+    }
+
+
+def test_record_active_day_first_ever_day_starts_streak_at_one():
+    state = memory.record_active_day("p1", "2026-01-01")
+    assert state == {"last_active_date": "2026-01-01", "current_streak": 1}
+
+
+def test_record_active_day_same_day_is_a_noop():
+    memory.record_active_day("p1", "2026-01-01")
+    state = memory.record_active_day("p1", "2026-01-01")
+    assert state == {"last_active_date": "2026-01-01", "current_streak": 1}
+
+
+def test_record_active_day_consecutive_day_extends_streak():
+    memory.record_active_day("p1", "2026-01-01")
+    state = memory.record_active_day("p1", "2026-01-02")
+    assert state == {"last_active_date": "2026-01-02", "current_streak": 2}
+
+
+def test_record_active_day_gap_resets_streak_to_one():
+    memory.record_active_day("p1", "2026-01-01")
+    memory.record_active_day("p1", "2026-01-02")
+    state = memory.record_active_day("p1", "2026-01-10")
+    assert state == {"last_active_date": "2026-01-10", "current_streak": 1}
+
+
+def test_add_seconds_studied_accumulates_across_calls():
+    memory.add_seconds_studied("p1", 100)
+    memory.add_seconds_studied("p1", 50)
+    assert memory.get_profile_state("p1")["total_seconds_studied"] == 150
+
+
+def test_add_seconds_studied_ignores_zero_or_negative():
+    memory.add_seconds_studied("p1", 0)
+    memory.add_seconds_studied("p1", -10)
+    assert memory.get_profile_state("p1")["total_seconds_studied"] == 0
+
+
+def test_add_seen_milestones_unions_across_calls():
+    memory.add_seen_milestones("p1", {"vocab:Spanish:50"})
+    memory.add_seen_milestones("p1", {"streak:3", "vocab:Spanish:50"})
+    assert set(memory.get_profile_state("p1")["seen_milestones"]) == {"vocab:Spanish:50", "streak:3"}
+
+
+def test_set_last_auto_backup_at_persists():
+    memory.set_last_auto_backup_at("p1", "2026-01-01T00:00:00+00:00")
+    assert memory.get_profile_state("p1")["last_auto_backup_at"] == "2026-01-01T00:00:00+00:00"
+
+
+def test_set_profile_state_fully_replaces_existing_row():
+    memory.add_seconds_studied("p1", 999)
+    memory.add_seen_milestones("p1", {"streak:3"})
+
+    memory.set_profile_state(
+        "p1",
+        {
+            "total_seconds_studied": 42,
+            "last_active_date": "2026-02-01",
+            "current_streak": 5,
+            "seen_milestones": ["vocab:French:50"],
+            "last_auto_backup_at": None,
+        },
+    )
+
+    assert memory.get_profile_state("p1") == {
+        "total_seconds_studied": 42,
+        "last_active_date": "2026-02-01",
+        "current_streak": 5,
+        "seen_milestones": ["vocab:French:50"],
+        "last_auto_backup_at": None,
+    }
+
+
+def test_delete_profile_state_removes_the_row():
+    memory.add_seconds_studied("p1", 100)
+    memory.delete_profile_state("p1")
+    assert memory.get_profile_state("p1")["total_seconds_studied"] == 0
+
+
+def test_profile_state_scoped_to_profile():
+    memory.add_seconds_studied("p1", 100)
+    memory.add_seconds_studied("p2", 5)
+    assert memory.get_profile_state("p1")["total_seconds_studied"] == 100
+    assert memory.get_profile_state("p2")["total_seconds_studied"] == 5

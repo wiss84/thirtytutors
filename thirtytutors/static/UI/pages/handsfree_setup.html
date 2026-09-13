@@ -9,7 +9,7 @@
 {% block styles %}
 <link rel="stylesheet" href="/UI/styles/sidebar.css?v=1" />
 <link rel="stylesheet" href="/UI/styles/modals.css?v=1" />
-<link rel="stylesheet" href="/UI/styles/handsfree_setup.css?v=1" />
+<link rel="stylesheet" href="/UI/styles/handsfree_setup.css?v=2" />
 {% endblock %}
 
 {% block content %}
@@ -17,6 +17,7 @@
   <div id="hfSetupCard">
     <h1 id="hfSetupTitle">Welcome to the hands-free setup page</h1>
     <p id="hfSetupIntro">To be able to use hands-free mode, you'll need to set up and pass the following audio checks:</p>
+    <button id="watchHandsfreeTutorialBtn" class="pill-btn handsfree-tutorial-btn" type="button">▶ Watch a quick tutorial on hands-free setup</button>
 
     <section class="hf-setup-section">
       <h2>Microphone</h2>
@@ -59,8 +60,16 @@
     </div>
   </div>
 </div>
+
+<div id="handsfreeTutorialOverlay">
+  <div id="handsfreeTutorialModal">
+    <h2>Hands-free setup walkthrough</h2>
+    <video id="handsfreeTutorialVideo" src="/handfree_setup_tutorial.mp4" controls playsinline></video>
+    <button id="closeHandsfreeTutorialBtn" class="pill-btn" type="button" style="width:100%; margin-top:14px;">Close</button>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
-<script src="/UI/scripts/handsfreeSetup.js?v=3"></script>
+<script src="/UI/scripts/handsfreeSetup.js?v=4"></script>
 {% endblock %}

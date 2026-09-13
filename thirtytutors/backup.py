@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 
 from . import memory
 from .constants import DATA_DIR
-from .profiles_store import get_profile_by_id, patch_profile, upsert_profile
+from .profiles_store import get_profile_by_id, upsert_profile
 from .speech_detection.enrollment import profile_enrollment_dir
 
 # Where an automatic backup is written - no folder-picker UI for this (no
@@ -44,6 +44,14 @@ def build_profile_backup_zip(profile_id: str) -> bytes:
     folder, if it has one. Used by both the manual Export button and
     maybe_run_auto_backup below - one export path, not two to keep in
     sync.
+
+    profile_state (total_seconds_studied/last_active_date/current_streak/
+    seen_milestones/last_auto_backup_at - see memory.py) lives in
+    memory.db, not profiles.json, so it's folded into the exported profile
+    dict explicitly here rather than already being part of `profile` -
+    otherwise a restored backup would silently lose the student's
+    streak/hours/milestone history even though everything else came back
+    intact.
     """
     profile = get_profile_by_id(profile_id)
     if profile is None:
@@ -52,7 +60,7 @@ def build_profile_backup_zip(profile_id: str) -> bytes:
     manifest = {
         "format_version": 1,
         "exported_at": datetime.now(UTC).isoformat(),
-        "profile": profile,
+        "profile": {**profile, **memory.get_profile_state(profile_id)},
         "conversations": memory.export_profile_conversations(profile_id),
     }
 
@@ -81,6 +89,16 @@ def import_profile_backup_zip(zip_bytes: bytes) -> str:
     entirely rather than merging mic-by-mic - a restored backup should
     behave identically to the machine it came from, not a partial mix of
     old and new enrollment data.
+
+    The manifest's "profile" dict is the merged shape build_profile_backup_zip
+    produces (profiles.json fields plus profile_state fields folded
+    together) - the profile_state fields are popped back out here and
+    written to memory.db via memory.set_profile_state, so profiles.json
+    only ever receives its own fields. This also transparently upgrades a
+    backup made before profile_state existed as a separate table: an older
+    export's "profile" dict already carried these same field names
+    directly (they used to live in profiles.json), so the same pop/restore
+    logic still finds and migrates them correctly.
     """
     buf = io.BytesIO(zip_bytes)
     with zipfile.ZipFile(buf, "r") as zf:
@@ -88,7 +106,16 @@ def import_profile_backup_zip(zip_bytes: bytes) -> str:
         profile = manifest["profile"]
         profile_id = profile["id"]
 
+        state = {
+            "total_seconds_studied": profile.pop("total_seconds_studied", None),
+            "last_active_date": profile.pop("last_active_date", None),
+            "current_streak": profile.pop("current_streak", None),
+            "seen_milestones": profile.pop("seen_milestones", None),
+            "last_auto_backup_at": profile.pop("last_auto_backup_at", None),
+        }
+
         upsert_profile(profile)
+        memory.set_profile_state(profile_id, state)
         memory.import_profile_conversations(profile_id, manifest.get("conversations", []))
 
         enrollment_names = [n for n in zf.namelist() if n.startswith(_ENROLLMENT_PREFIX) and not n.endswith("/")]
@@ -133,7 +160,7 @@ def maybe_run_auto_backup(profile_id: str) -> bool:
         return False
 
     interval_days = profile.get("auto_backup_interval_days") or 7
-    last_raw = profile.get("last_auto_backup_at")
+    last_raw = memory.get_profile_state(profile_id).get("last_auto_backup_at")
     if last_raw:
         try:
             last = datetime.fromisoformat(last_raw)
@@ -147,5 +174,5 @@ def maybe_run_auto_backup(profile_id: str) -> bool:
     dest_path = AUTO_BACKUP_DIR / f"ThirtyTutors-{_safe_filename_part(profile.get('name'))}-{stamp}.zip"
     dest_path.write_bytes(build_profile_backup_zip(profile_id))
 
-    patch_profile(profile_id, {"last_auto_backup_at": datetime.now(UTC).isoformat()})
+    memory.set_last_auto_backup_at(profile_id, datetime.now(UTC).isoformat())
     return True

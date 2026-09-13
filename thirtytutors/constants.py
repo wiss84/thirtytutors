@@ -263,15 +263,17 @@ def get_api_voice_name(voice_name: str) -> str:
 
 # Live API model choices. Rate limits are what's visible on the free tier as
 # of mid-2026 and can change - shown in the UI so the choice is informed.
-# Only the 2.5 native-audio generation exposes "affective dialog" (emotional
-# tone sensitivity/expression); the 3.x line traded that for lower latency.
+#
+# gemini-2.5-flash-native-audio-latest was removed entirely (not just
+# deprioritized) after most of the duplicate/repeated-response issues
+# logged in design_plans/issues.md turned out to happen on it specifically
+# - see that file for the actual incidents. With only one entry here,
+# live_session.py's fallback_model selection naturally computes to None
+# (nothing else left to fall back to), so this also stops it from ever
+# being used as a silent fallback, not just as a direct UI choice. See
+# profiles_store.migrate_legacy_model_name for what happens to
+# conversations that were already created while it was still an option.
 MODEL_OPTIONS = [
-    {
-        "id": "gemini-2.5-flash-native-audio-latest",
-        "label": "Gemini 2.5 Flash Native Audio Dialog",
-        "rate_limit_note": "1M TPM",
-        "supports_affective_dialog": True,
-    },
     {
         "id": "gemini-3.1-flash-live-preview",
         "label": "Gemini 3 Flash Live",
@@ -279,7 +281,7 @@ MODEL_OPTIONS = [
         "supports_affective_dialog": False,
     },
 ]
-DEFAULT_MODEL = MODEL_OPTIONS[1]["id"]
+DEFAULT_MODEL = MODEL_OPTIONS[0]["id"]
 
 # Single source of truth for the package's version - pyproject.toml reads
 # this dynamically at build time (see its own
@@ -290,7 +292,7 @@ DEFAULT_MODEL = MODEL_OPTIONS[1]["id"]
 # importing this directly, falling back to this constant only if the
 # package isn't recognized as installed at all (e.g. running straight fromgit
 # a source checkout without ever having been pip-installed).
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 
 # OS-appropriate per-user data directory (profiles.json, memory.db,
 # voice_enrollment/) instead of storing user data inside the package tree

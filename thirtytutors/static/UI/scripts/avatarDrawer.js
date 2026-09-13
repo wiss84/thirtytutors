@@ -19,6 +19,7 @@ import { HeadAudio } from '/vendor/headaudio/modules/headaudio.mjs';
 const cameraToggleBtn = document.getElementById('cameraToggleBtn');
 const bodyEl = document.getElementById('body');
 const avatarDrawer = document.getElementById('avatarDrawer');
+const avatarDrawerFrame = document.getElementById('avatarDrawerFrame');
 const avatarDrawerPreview = document.getElementById('avatarDrawerPreview');
 const avatarDrawerHint = document.getElementById('avatarDrawerHint');
 const avatarMaximizeBtn = document.getElementById('avatarMaximizeBtn');
@@ -183,6 +184,7 @@ async function ensureAvatarReady() {
   head.mtMaxVExceptions['jawOpen'] = VISEME_MAXV;
 
   const voiceName = window.currentVoiceName || 'Kore';
+  applyTutorBackground(voiceName);
   try {
     await head.showAvatar({ url: `/avatar/${voiceName}_th.glb` });
     stubMissingBlendShapes();
@@ -199,6 +201,30 @@ async function ensureAvatarReady() {
   window.registerAvatarAudioSink(head.audioCtx, headaudio);
 
   avatarReady = true;
+}
+
+// Per-tutor background photo BEHIND the avatar itself, inside
+// #avatarDrawerFrame (covers both the small drawer view and fullscreen -
+// same element in both, fullscreen just resizes it via CSS, see
+// avatar_drawer.css) - not the wider learning-page background. See
+// static/backgrounds/ (gitignored, not part of the real asset pipeline
+// yet - this whole thing goes away once the real version lands, loaded
+// from a downloaded/versioned background-photos bundle, same asset-
+// pipeline pattern as avatars/voices/tile-photos, surfaced through the
+// Settings > Updates "Update & Relaunch" flow rather than a static file
+// dropped directly into the package tree). Every VOICE_OPTIONS name has a
+// matching {name}_background.webp in that folder, so the URL is derived
+// straight from voiceName rather than kept as a hand-maintained map - if a
+// future voice is added without artwork yet, a missing background image
+// just fails to load silently (CSS background-image, not <img> - no
+// broken-image icon), falling back to the frame's plain panel color
+// exactly as before. Relies on TalkingHead's canvas already rendering
+// with a transparent background - #avatarDrawerFrame's own background-
+// color (var(--panel-raised)) was already the only thing visible behind
+// the avatar before this, which only makes sense if the canvas itself has
+// no opaque clear color of its own.
+function applyTutorBackground(voiceName) {
+  avatarDrawerFrame.style.backgroundImage = voiceName ? `url('/backgrounds/${voiceName}_background.webp')` : '';
 }
 
 cameraToggleBtn.addEventListener('click', async () => {
@@ -227,8 +253,8 @@ function enterMaximize() {
   avatarMaximizeBtn.textContent = '⤡';
   avatarMaximizeBtn.title = 'Minimize avatar';
   avatarViewSelect.style.display = 'inline-block';
-  avatarViewSelect.value = 'full';
-  if (head) head.setView('full');
+  avatarViewSelect.value = 'upper';
+  if (head) head.setView('upper');
 }
 
 function exitMaximize() {

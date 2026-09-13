@@ -240,12 +240,12 @@ def relaunch_app() -> None:
 def close_this_window() -> bool:
     """Closes THIS process's own pywebview window, which is what actually
     lets it exit: desktop.py's run() blocks on webview.start() until the
-    window closes, then returns normally (uvicorn's server thread is a
-    daemon thread - see desktop.py - so nothing keeps the process alive
-    once the main thread finishes). webview.windows[0].destroy() is safe
-    to call from a background thread (this runs from inside a FastAPI
-    request handler, not the pywebview GUI thread) - pywebview dispatches
-    it internally.
+    window closes, then runs its own graceful server shutdown (see
+    desktop.py's _shut_down_server_gracefully) before finally returning -
+    so the process does still exit shortly after this call, just not
+    instantly. webview.windows[0].destroy() is safe to call from a
+    background thread (this runs from inside a FastAPI request handler,
+    not the pywebview GUI thread) - pywebview dispatches it internally.
 
     Returns False (does nothing) if there's no window to close - e.g. if
     this module ever gets imported somewhere webview was never started

@@ -27,6 +27,10 @@ const thresholdTestLog = document.getElementById('thresholdTestLog');
 const hfSetupDoneSection = document.getElementById('hfSetupDoneSection');
 const hfBackBtn = document.getElementById('hfBackBtn');
 const hfContinueBtn = document.getElementById('hfContinueBtn');
+const watchHandsfreeTutorialBtn = document.getElementById('watchHandsfreeTutorialBtn');
+const handsfreeTutorialOverlay = document.getElementById('handsfreeTutorialOverlay');
+const handsfreeTutorialVideo = document.getElementById('handsfreeTutorialVideo');
+const closeHandsfreeTutorialBtn = document.getElementById('closeHandsfreeTutorialBtn');
 
 const DEFAULT_MIC_CALIBRATION_KEY = '__default__';
 
@@ -758,6 +762,25 @@ hfBackBtn.addEventListener('click', () => {
 
 hfContinueBtn.addEventListener('click', () => {
   window.location.href = '/';
+});
+
+// --- Tutorial video popup ---
+
+function openHandsfreeTutorial() {
+  handsfreeTutorialOverlay.classList.add('visible');
+  handsfreeTutorialVideo.currentTime = 0;
+  handsfreeTutorialVideo.play().catch(() => {}); // autoplay can still be blocked on some platforms - the video still has its own controls either way
+}
+
+function closeHandsfreeTutorial() {
+  handsfreeTutorialOverlay.classList.remove('visible');
+  handsfreeTutorialVideo.pause();
+}
+
+watchHandsfreeTutorialBtn.addEventListener('click', openHandsfreeTutorial);
+closeHandsfreeTutorialBtn.addEventListener('click', closeHandsfreeTutorial);
+handsfreeTutorialOverlay.addEventListener('click', (e) => {
+  if (e.target === handsfreeTutorialOverlay) closeHandsfreeTutorial();
 });
 
 // --- Init ---

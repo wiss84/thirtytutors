@@ -138,15 +138,58 @@
   #talkBtn, #talkBtn.recording { animation: none; }
 }
 
-#errorBanner {
+/* --- Status toast (connection issues / "still waiting" / errors) - fixed
+   to the viewport so it's impossible to miss regardless of scroll
+   position, non-blocking (no backdrop, rest of the page stays usable)
+   unlike the settings/notes modals. Two tones (see transcript.js's
+   showStatusToast): 'info' for a transient "still waiting" state (no
+   retry button - nothing to retry, it's still in progress), 'error' for
+   an actual failure (retry button shown - see websocket.js). */
+
+#statusToast {
   display: none;
-  margin: 0 40px 12px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: rgba(193, 64, 61, 0.12);
-  border: 1px solid rgba(193, 64, 61, 0.4);
-  color: #f0b4b2;
-  font-size: 0.82rem;
-  white-space: pre-wrap;
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  z-index: 80;
+  align-items: center;
+  gap: 12px;
+  max-width: min(480px, 90vw);
+  padding: 12px 16px;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
-#errorBanner.visible { display: block; }
+#statusToast.visible {
+  display: flex;
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+#statusToast.error {
+  background: rgba(193, 64, 61, 0.16);
+  border: 1px solid rgba(193, 64, 61, 0.5);
+  color: #f0b4b2;
+}
+#statusToast.info {
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+#statusToastIcon::before {
+  content: '\26A0\FE0F'; /* warning triangle - overridden to an hourglass for .info below */
+}
+#statusToast.info #statusToastIcon::before {
+  content: '\23F3'; /* hourglass */
+}
+#statusToastMessage {
+  flex: 1;
+}
+#statusToastRetryBtn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}

@@ -39,6 +39,7 @@ from .constants import (
     VOICE_OPTIONS,
 )
 from .export_docx import build_notes_docx
+from .languages import LANGUAGES
 from .profiles_store import (
     delete_profile,
     get_profile_by_id,
@@ -56,6 +57,17 @@ router = APIRouter()
 @router.get("/api/voices")
 def get_voices():
     return {"voices": VOICE_OPTIONS, "default": DEFAULT_VOICE}
+
+
+@router.get("/api/languages")
+def get_languages():
+    """Autocomplete suggestions for the native/target language text inputs
+    on /get-started, /avatar-select, and the Settings modal's General tab
+    (see languageAutocomplete.js) - a curated list, not a hard allowlist;
+    see languages.py's own module docstring for why those inputs stay
+    plain free text either way.
+    """
+    return {"languages": LANGUAGES}
 
 
 @router.get("/api/models")
@@ -364,21 +376,20 @@ async def create_profile(request: Request):
         #  "calibrated": bool, "tested": bool}. Per-mic so switching mics
         # never overwrites another mic's calibration - see handsfreeSetup.js.
         "mic_calibrations": {},
-        # Stats tab bookkeeping (see stats.py) - not user-editable, updated
-        # server-side only (live_session.py accumulates total_seconds_studied
-        # and last_active_date/current_streak once per Live session;
-        # stats.get_new_milestones appends to seen_milestones as each tier
-        # is first surfaced in the notification bell).
-        "total_seconds_studied": 0,
-        "last_active_date": None,
-        "current_streak": 0,
-        "seen_milestones": [],
         # Backup (see backup.py) - auto_backup_interval_days only takes
-        # effect once auto_backup_enabled is true; last_auto_backup_at is
-        # set by maybe_run_auto_backup itself, never directly by the user.
+        # effect once auto_backup_enabled is true. Stats-tab bookkeeping
+        # (total_seconds_studied, last_active_date, current_streak,
+        # seen_milestones) and last_auto_backup_at used to live here too,
+        # but now live in memory.db's profile_state table (see memory.py) -
+        # SQLite's transactional writes are far more crash-resistant than
+        # rewriting this whole JSON file, which matters since those are the
+        # fields updated automatically and most frequently, including right
+        # as the app is closing (see live_session.py's ws_session `finally`
+        # block). A brand new profile simply has no profile_state row yet -
+        # memory.get_profile_state returns the all-zero defaults for that
+        # case, so no placeholder fields are needed here.
         "auto_backup_enabled": False,
         "auto_backup_interval_days": 7,
-        "last_auto_backup_at": None,
     }
     profiles = load_profiles()
     profiles.append(profile)
@@ -410,6 +421,7 @@ def remove_profile(profile_id: str):
         raise HTTPException(404, "Profile not found")
     for conv in memory.list_conversations(profile_id):
         memory.delete_conversation(conv["id"])
+    memory.delete_profile_state(profile_id)
     speech_detection.delete_enrollment(profile_id)
     return {"deleted": True}
 
@@ -476,19 +488,21 @@ def check_auto_backup_endpoint(profile_id: str):
 def get_profile_stats_endpoint(profile_id: str):
     """Backs the Settings modal's Stats tab (see statsPane.js) - per-
     language breakdown plus profile-wide totals (see stats.py), with the
-    profile fields it doesn't otherwise expose (total_seconds_studied/
-    current_streak/last_active_date) folded straight into the same
-    response so the frontend only needs one fetch.
+    stats-tab fields it doesn't otherwise expose (total_seconds_studied/
+    current_streak/last_active_date - see memory.py's profile_state table)
+    folded straight into the same response so the frontend only needs one
+    fetch.
     """
     profile = get_profile_by_id(profile_id)
     if profile is None:
         raise HTTPException(404, "Profile not found")
     data = stats.get_profile_stats(profile_id)
+    state = memory.get_profile_state(profile_id)
     return {
         **data,
-        "total_seconds_studied": profile.get("total_seconds_studied") or 0,
-        "current_streak": profile.get("current_streak") or 0,
-        "last_active_date": profile.get("last_active_date"),
+        "total_seconds_studied": state["total_seconds_studied"],
+        "current_streak": state["current_streak"],
+        "last_active_date": state["last_active_date"],
     }
 
 
@@ -500,10 +514,9 @@ def get_milestone_status_endpoint(profile_id: str):
     stats.get_new_milestones's own docstring for why), so this returns
     the same newly-crossed set at most once.
     """
-    profile = get_profile_by_id(profile_id)
-    if profile is None:
+    if get_profile_by_id(profile_id) is None:
         raise HTTPException(404, "Profile not found")
-    return {"new_milestones": stats.get_new_milestones(profile_id, profile)}
+    return {"new_milestones": stats.get_new_milestones(profile_id)}
 
 
 @router.get("/api/profiles/{profile_id}/mic-status")

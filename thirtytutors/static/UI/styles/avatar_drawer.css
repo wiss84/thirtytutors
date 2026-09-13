@@ -20,7 +20,10 @@
   margin: 20px auto 12px;
   border-radius: 16px;
   overflow: hidden;
-  background: var(--panel-raised);
+  background-color: var(--panel-raised);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   border: 1px solid var(--border);
 }
 #avatarDrawerPreview {

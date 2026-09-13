@@ -80,3 +80,21 @@ async def serve_whats_new_page(request: Request, version: str | None = None):
             "versions": versions,
         },
     )
+
+
+# Dev-only sandbox pages for the 3D room/character controller work
+# under static/UI/game_test (see PROGRESS_AND_NEXT_STEPS.md there) -
+# deliberately separate paths from the /game_test StaticFiles mount
+# registered in main.py, rather than sub-paths of it, so an explicit
+# route here never has to rely on registration order against that mount
+# to be found. Templates referenced below are still resolved against
+# this module's existing `templates` root (static/UI), same as every
+# other route.
+@router.get("/game-test-scene")
+async def serve_game_test_scene_page(request: Request):
+    return templates.TemplateResponse(request, "game_test/scene.html")
+
+
+@router.get("/game-test-room-inspect")
+async def serve_game_test_room_inspect_page(request: Request):
+    return templates.TemplateResponse(request, "game_test/room_inspect.html")

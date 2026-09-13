@@ -3,7 +3,11 @@
     <div id="emptyState">Hold the button below and start speaking.</div>
   </div>
 
-  <div id="errorBanner"></div>
+  <div id="statusToast">
+    <span id="statusToastIcon"></span>
+    <span id="statusToastMessage"></span>
+    <button id="statusToastRetryBtn" class="pill-btn" type="button" hidden>Retry</button>
+  </div>
 
   <div id="waveformWrap">
     <canvas id="waveform"></canvas>

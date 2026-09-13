@@ -30,14 +30,12 @@ Thumbs.db
 
 # Personal
 design_plans/
+debugging_server_errors/
 thirtytutors/static/UI/avatar_test/
+thirtytutors/static/UI/game_test/
 ThirtyTutors.bat
 Test_suite.bat
 packaging/
 ThirtyTutors.spec
 
-# Marketing (landing-page) video/gif source assets - like avatar/voices/
-# photos, these are release-time-only source material, not part of the
-# pip package or the git repo.
-marketing_assets_source/
 

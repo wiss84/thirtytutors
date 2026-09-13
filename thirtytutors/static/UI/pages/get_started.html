@@ -9,7 +9,7 @@
 {% block styles %}
 <link rel="stylesheet" href="/UI/styles/sidebar.css?v=1" />
 <link rel="stylesheet" href="/UI/styles/modals.css?v=1" />
-<link rel="stylesheet" href="/UI/styles/get_started.css?v=1" />
+<link rel="stylesheet" href="/UI/styles/get_started.css?v=2" />
 {% endblock %}
 
 {% block content %}
@@ -22,26 +22,46 @@
       <label class="field-label" for="firstNameInput">First name</label>
       <input id="firstNameInput" type="text" class="text-input" placeholder="Your name" maxlength="40" autocomplete="off" />
 
-      <label class="field-label" for="nativeLanguageInput">You speak</label>
-      <input id="nativeLanguageInput" type="text" class="text-input" placeholder="English" autocomplete="off" />
+      <label class="field-label" for="nativeLanguageInput">Type your native language</label>
+      <input id="nativeLanguageInput" type="text" class="text-input" autocomplete="off" />
 
       <label class="field-label" for="apiKeyInput">Gemini API key</label>
+      <button id="watchApiKeyTutorialBtn" class="pill-btn api-key-tutorial-btn" type="button">▶ Watch a fast tutorial on how to get a free API key</button>
       <div class="field-row">
         <input id="apiKeyInput" type="password" class="text-input" placeholder="Paste your Gemini API key" autocomplete="off" />
         <button id="toggleApiKeyBtn" class="icon-btn" type="button" title="Show/hide API key">👁️</button>
       </div>
-      <p class="field-hint">Free from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Stored on your profile - required to connect.</p>
+      <p class="field-hint">To get a free API key, click the <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> link, sign up, then click 'Create API key', copy the key and paste it above.</p>
 
       <label class="field-label" for="modelSelect">Model</label>
       <select id="modelSelect"></select>
       <p class="field-hint" id="modelHint"></p>
 
+      <div class="sidebar-section" style="margin-top: 20px;">
+        <h3>Microphone</h3>
+        <p class="field-hint">Choose your microphone and stay silent, then click Calibrate mic - this is required before you can continue.</p>
+        <div class="field-row">
+          <select id="micSelect"><option value="">Default microphone</option></select>
+          <button id="refreshMicsBtn" class="icon-btn" type="button" title="Refresh microphone list">&#8635;</button>
+        </div>
+        <button id="calibrateMicBtn" class="pill-btn" type="button" style="width:100%; margin-top:8px;">Calibrate mic</button>
+        <p class="field-hint" id="calibrateMicStatus"></p>
+      </div>
+
       <button id="nextBtn" class="primary-btn" type="button" disabled style="width:100%; margin-top: 24px;">Next</button>
     </div>
+  </div>
+</div>
+
+<div id="apiKeyTutorialOverlay">
+  <div id="apiKeyTutorialModal">
+    <h2>How to get a free Gemini API key</h2>
+    <video id="apiKeyTutorialVideo" src="/Get_API_Key.mp4" controls playsinline></video>
+    <button id="closeApiKeyTutorialBtn" class="pill-btn" type="button" style="width:100%; margin-top:14px;">Close</button>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="/UI/scripts/get_started.js?v=1"></script>
+<script src="/UI/scripts/get_started.js?v=3"></script>
 {% endblock %}

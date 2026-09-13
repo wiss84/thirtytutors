@@ -26,6 +26,12 @@ const scenarioDescription = document.getElementById('scenarioDescription');
 const difficultyToggle = document.getElementById('difficultyToggle');
 const backBtn = document.getElementById('avatarBackBtn');
 const nextBtn = document.getElementById('avatarNextBtn');
+const watchAvatarSelectTutorialBtn = document.getElementById('watchAvatarSelectTutorialBtn');
+const avatarSelectTutorialOverlay = document.getElementById('avatarSelectTutorialOverlay');
+const avatarSelectTutorialVideo = document.getElementById('avatarSelectTutorialVideo');
+const closeAvatarSelectTutorialBtn = document.getElementById('closeAvatarSelectTutorialBtn');
+
+attachLanguageAutocomplete(targetLanguageInput);
 
 const DRAFT_KEY = 'landingDraft';
 const existingProfileId = new URLSearchParams(window.location.search).get('profile_id');
@@ -162,6 +168,25 @@ backBtn.addEventListener('click', () => {
   window.location.href = existingProfileId
     ? `/profiles?open=${encodeURIComponent(existingProfileId)}`
     : '/get-started';
+});
+
+// --- Tutorial video popup ---
+
+function openAvatarSelectTutorial() {
+  avatarSelectTutorialOverlay.classList.add('visible');
+  avatarSelectTutorialVideo.currentTime = 0;
+  avatarSelectTutorialVideo.play().catch(() => {}); // autoplay can still be blocked on some platforms - the video still has its own controls either way
+}
+
+function closeAvatarSelectTutorial() {
+  avatarSelectTutorialOverlay.classList.remove('visible');
+  avatarSelectTutorialVideo.pause();
+}
+
+watchAvatarSelectTutorialBtn.addEventListener('click', openAvatarSelectTutorial);
+closeAvatarSelectTutorialBtn.addEventListener('click', closeAvatarSelectTutorial);
+avatarSelectTutorialOverlay.addEventListener('click', (e) => {
+  if (e.target === avatarSelectTutorialOverlay) closeAvatarSelectTutorial();
 });
 
 async function createConversationForProfile(profileId, nativeLanguage, modelName) {

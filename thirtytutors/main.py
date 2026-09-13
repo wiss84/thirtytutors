@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import live_session, memory, quizzes, routes_api, routes_pages, speech_detection
 from .constants import ASSETS_DIR
+from .profiles_store import migrate_legacy_model_name, migrate_legacy_profile_state
 
 # StaticFiles doesn't know the .mjs extension, so it serves ES modules as
 # text/plain - which browsers refuse to execute (the "disallowed MIME type"
@@ -48,6 +49,20 @@ async def _warm_up_speaker_models(app: FastAPI):
     # Initialize DB at server boot
     memory.init_db()
     quizzes.init_db()
+
+    # One-time (per-profile), idempotent - see migrate_legacy_profile_state's
+    # own docstring for why this has to run AFTER memory.init_db() (needs
+    # the profile_state table to already exist) and what it protects
+    # against (existing users' stats silently resetting to zero on this
+    # update).
+    migrate_legacy_profile_state()
+
+    # Same idempotent-startup-migration posture as above, for a different
+    # problem: a conversation left over from before a model was retired
+    # from MODEL_OPTIONS (see constants.py) would otherwise keep using it
+    # forever, with no UI to fix it after the fact - see
+    # migrate_legacy_model_name's own docstring.
+    migrate_legacy_model_name()
 
     # Kick off background model warmup
     asyncio.create_task(asyncio.to_thread(speech_detection.warm_up))
@@ -93,7 +108,11 @@ async def _disable_static_caching(request: Request, call_next):
 #  - Everything else (UI/styles, UI/scripts, vendor/, pcm-processor.js,
 #    the platform icons) is bundled with the package under static/,
 #    resolved relative to this file rather than the process's current
-#    working directory.
+#    working directory. UI/avatar_test and UI/game_test additionally get
+#    their own dedicated mount below (rather than relying on the catch-
+#    all at the bottom), so files inside them can use the same shallow
+#    relative import paths ("../vendor/...") regardless of how deep
+#    they'd otherwise sit under UI/ via the catch-all.
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -150,5 +169,12 @@ if avatar_test_dir.exists():
         "/avatar_test",
         StaticFiles(directory=str(avatar_test_dir)),
         name="avatar_test_assets",
+    )
+game_test_dir = STATIC_DIR / "UI" / "game_test"
+if game_test_dir.exists():
+    app.mount(
+        "/game_test",
+        StaticFiles(directory=str(game_test_dir)),
+        name="game_test_assets",
     )
 app.mount("/", StaticFiles(directory=str(STATIC_DIR)), name="static")

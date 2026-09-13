@@ -1,7 +1,10 @@
 /* --- Landing page: centered profile-setup card ---
    #landingWrap is a flex child of the shared #pageBody (see base.css),
    which already sizes it to fill the viewport below the top bar - no
-   min-height/100vh needed here. */
+   min-height/100vh needed here. Background image + scrim so the card
+   floats above a full-bleed hero shot instead of the plain --bg color -
+   the scrim (a dark gradient under the image) exists purely for text/
+   card contrast, not a design choice about the image itself. */
 
 #landingWrap {
   display: flex;
@@ -9,15 +12,19 @@
   justify-content: center;
   padding: 24px;
   overflow-y: auto;
+  background-image: linear-gradient(180deg, rgba(10, 12, 18, 0.55), rgba(10, 12, 18, 0.75)), url('/ThirtyTutors_Academy.webp');
+  background-size: cover;
+  background-position: center;
 }
 
 #landingCard {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 40px 36px;
-  width: 380px;
+  padding: 32px 36px;
+  width: 480px;
   max-width: 92vw;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 }
 
 #landingTitle {
@@ -32,7 +39,7 @@
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85rem;
-  margin: 0 0 28px;
+  margin: 0 0 20px;
   line-height: 1.4;
 }
 
@@ -44,4 +51,55 @@
   background: var(--panel-raised);
   color: var(--text-muted);
   cursor: default;
+}
+
+/* Tighter than sidebar.css's default .sidebar-section (24px) - this card
+   already has several sections stacked (name/language/key/model/mic) and
+   fitting without a scrollbar mattered more here than the wider vertical
+   rhythm that makes sense in an actual sidebar panel. */
+#landingForm .sidebar-section {
+  margin-bottom: 4px;
+}
+
+/* --- API key tutorial video popup - see get_started.js for open/close
+   logic. Same overlay/click-outside-to-close convention as
+   #notesModalOverlay (modals.css), just page-local here since this popup
+   only exists on this one page. --- */
+
+.api-key-tutorial-btn {
+  width: 100%;
+  margin: 6px 0 12px;
+}
+
+#apiKeyTutorialOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 16, 0.75);
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+#apiKeyTutorialOverlay.visible { display: flex; }
+
+#apiKeyTutorialModal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  width: min(720px, 92vw);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+#apiKeyTutorialModal h2 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  margin: 0 0 14px;
+}
+
+#apiKeyTutorialVideo {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 8px;
+  display: block;
+  background: #000;
 }

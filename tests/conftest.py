@@ -151,7 +151,7 @@ def make_profile(isolated_data_dir):
             "voice_gender": "Female",
             "native_language": "English",
             "target_language": "Polish",
-            "model_name": "gemini-2.5-flash-native-audio-latest",
+            "model_name": "gemini-3.1-flash-live-preview",
             "default_difficulty": "intermediate",
             "active_conversation_id": None,
             "mic_calibrations": {},
@@ -177,7 +177,7 @@ def make_conversation(isolated_data_dir):
             "voice_name": "Kore",
             "native_language": "English",
             "target_language": "Polish",
-            "model_name": "gemini-2.5-flash-native-audio-latest",
+            "model_name": "gemini-3.1-flash-live-preview",
             "scenario": "free_learning",
             "difficulty": "intermediate",
         }

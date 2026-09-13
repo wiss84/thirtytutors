@@ -41,10 +41,19 @@ def test_reference_data_endpoints_return_expected_shape(client):
     assert "voices" in client.get("/api/voices").json()
     assert "models" in client.get("/api/models").json()
     assert "scenarios" in client.get("/api/scenarios").json()
+    assert "languages" in client.get("/api/languages").json()
 
     app_info = client.get("/api/app-info").json()
     assert "version" in app_info
     assert isinstance(app_info["credits"], list)
+
+
+def test_languages_endpoint_returns_a_sorted_list_of_unique_names(client):
+    languages = client.get("/api/languages").json()["languages"]
+    assert len(languages) > 20  # a genuinely useful list, not a stub
+    assert all(isinstance(name, str) and name for name in languages)
+    assert len(languages) == len(set(languages))  # no duplicates
+    assert languages == sorted(languages)
 
 
 # --- Profiles CRUD ---

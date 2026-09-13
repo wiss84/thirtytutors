@@ -40,6 +40,8 @@ const updateDetailStatus = document.getElementById('updateDetailStatus');
 const closeUpdateDetailBtn = document.getElementById('closeUpdateDetailBtn');
 
 const firstRunOverlay = document.getElementById('firstRunOverlay');
+const firstRunTitle = document.getElementById('firstRunTitle');
+const firstRunMessage = document.getElementById('firstRunMessage');
 const firstRunProgressWrap = document.getElementById('firstRunProgressWrap');
 const firstRunProgressFill = document.getElementById('firstRunProgressFill');
 const firstRunStatus = document.getElementById('firstRunStatus');
@@ -364,28 +366,47 @@ async function loadUpdateStatus(force) {
 // downloaded yet - assets.current is null specifically when no local
 // version marker exists at all (see updater.check_assets_update), which
 // is a stronger condition than assets.update_available (that's also true
-// for an ordinary stale-but-present bundle, which should stay a
-// dismissible bell notification, not a forced blocking download). The EXE
-// installer downloads this bundle during setup itself, so this only ever
-// fires for an MSIX/Store install, which can't - but nothing here checks
-// install method directly, it just reacts to the bundle genuinely being
-// absent regardless of why.
+// for an ordinary stale-but-present bundle). Used only to pick which
+// wording maybeStartAutoUpdate shows below, NOT to gate whether it runs -
+// see that function for the actual (broader) trigger.
 function isFirstRunAssetsMissing(status) {
   return !!(status && status.assets && status.assets.current === null);
 }
 
-let firstRunSetupStarted = false;
+let autoUpdateStarted = false;
 
 // Runs the exact same download steps as a manual "Update & Relaunch"
-// (buildUpdateSteps/runUpdateAction above) - including any pending app or
-// marketing update that happens to also be available - but triggered
+// (buildUpdateSteps/runUpdateAction above) - whatever combination of app/
+// assets/marketing updates happens to be pending - but triggered
 // automatically with no click, behind a full-screen non-dismissible
 // overlay instead of the bell's small modal. Ends in the same relaunch
-// either way, so the next launch lands back here with assets.current no
-// longer null and this becomes a no-op for good.
-async function maybeStartFirstRunSetup() {
-  if (firstRunSetupStarted || !isFirstRunAssetsMissing(latestUpdateStatus)) return;
-  firstRunSetupStarted = true;
+// either way, so the next launch lands back here with nothing pending and
+// this becomes a no-op for good (until the next real update ships).
+//
+// Covers every case describeUpdate does, not just the one-time "assets
+// never downloaded at all" case this used to be limited to - that's still
+// the one case that gets its own wording below (a first run genuinely
+// can't do anything useful without the avatar bundle, so it reads as
+// setup rather than an update), everything else shows a generic
+// "Updating ThirtyTutors" message built from describeUpdate's own summary
+// text, the same text the bell's detail modal would otherwise have shown.
+//
+// On failure (see runUpdateAction's own catch), this just leaves the
+// overlay showing the failure message with Retry available - it does NOT
+// fall through to launching the app on the current version, since the
+// overlay covers the whole page underneath it either way; a person stuck
+// offline can still leave the app running here and it'll succeed the
+// moment their connection comes back, same as any other retry.
+async function maybeStartAutoUpdate() {
+  const info = describeUpdate(latestUpdateStatus);
+  if (autoUpdateStarted || !info) return;
+  autoUpdateStarted = true;
+
+  const firstRun = isFirstRunAssetsMissing(latestUpdateStatus);
+  firstRunTitle.textContent = firstRun ? 'Setting up ThirtyTutors' : 'Updating ThirtyTutors';
+  firstRunMessage.textContent = firstRun
+    ? "Downloading your 3D tutor avatars and voices - this only happens once. Make sure you're connected to the internet."
+    : info.message;
 
   firstRunRetryBtn.hidden = true;
   firstRunStatus.textContent = '';
@@ -404,11 +425,11 @@ async function maybeStartFirstRunSetup() {
   );
   // Only reachable on failure - a success ends in a relaunch that tears
   // this whole page down before runUpdateAction's promise resolves.
-  firstRunSetupStarted = false;
+  autoUpdateStarted = false;
   firstRunRetryBtn.hidden = false;
 }
 
-firstRunRetryBtn.addEventListener('click', maybeStartFirstRunSetup);
+firstRunRetryBtn.addEventListener('click', maybeStartAutoUpdate);
 
 async function loadWhatsNewStatus() {
   try {
@@ -472,6 +493,6 @@ updateDetailActionBtn.addEventListener('click', () => {
   );
 });
 
-loadUpdateStatus(false).then(maybeStartFirstRunSetup);
+loadUpdateStatus(false).then(maybeStartAutoUpdate);
 loadWhatsNewStatus();
 loadMilestoneStatus();

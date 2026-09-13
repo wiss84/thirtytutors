@@ -121,6 +121,15 @@ function base64ToInt16(b64) {
   return new Int16Array(bytes.buffer);
 }
 
+// Crossfades every chunk's boundary through near-silence instead of
+// gluing discrete AudioBufferSourceNodes together at full amplitude -
+// stitching them together directly caused an intermittent audible
+// click/beep during tutor speech, reproduced consistently across
+// different machines. A short edge fade is the standard fix for this
+// class of artifact in any app that stitches together separately-
+// scheduled audio buffers.
+const EDGE_FADE_S = 0.002;
+
 function playAudioChunk(b64data) {
   ensurePlaybackContext();
   const ctx = avatarAudioSink ? avatarAudioSink.audioCtx : playbackContext;
@@ -134,14 +143,27 @@ function playAudioChunk(b64data) {
 
   const source = ctx.createBufferSource();
   source.buffer = buffer;
+
+  const gainNode = ctx.createGain();
+  source.connect(gainNode);
   if (avatarAudioSink) {
-    source.connect(avatarAudioSink.headaudio); // viseme analysis -> mouth movement
-    source.connect(ctx.destination); // actually audible
+    gainNode.connect(avatarAudioSink.headaudio); // viseme analysis -> mouth movement
+    gainNode.connect(ctx.destination); // actually audible
   } else {
-    source.connect(playbackBus);
+    gainNode.connect(playbackBus);
   }
 
   const startAt = Math.max(nextPlaybackTime, ctx.currentTime);
+  // Clamped to half the chunk's own duration - some chunks are as short
+  // as ~40ms, and the fade-in/fade-out must never overlap each other
+  // within one chunk (AudioParam automation events must be strictly
+  // increasing in time).
+  const fadeS = Math.min(EDGE_FADE_S, buffer.duration / 2);
+  gainNode.gain.setValueAtTime(0, startAt);
+  gainNode.gain.linearRampToValueAtTime(1, startAt + fadeS);
+  gainNode.gain.setValueAtTime(1, startAt + buffer.duration - fadeS);
+  gainNode.gain.linearRampToValueAtTime(0, startAt + buffer.duration);
+
   source.start(startAt);
   nextPlaybackTime = startAt + buffer.duration;
 }
@@ -150,6 +172,24 @@ function isTutorSpeaking() {
   const ctx = avatarAudioSink ? avatarAudioSink.audioCtx : playbackContext;
   return !!ctx && ctx.currentTime < nextPlaybackTime;
 }
+
+// Resets the audio-playback scheduling clock (see playAudioChunk above) -
+// called whenever a NEW session_status arrives (websocket.js), since that
+// always means either the very first connect (nothing scheduled yet, so
+// this is a no-op - ctx is still null at that point) or a reconnect
+// (go_away/error - see live_session.py's module docstring) that replaced
+// the underlying Gemini session entirely. Without this, nextPlaybackTime
+// keeps counting from wherever the OLD session's last audio chunk left
+// it - if that session was cut off mid-speech (the common case for an
+// error-triggered reconnect), the NEW session's first audio chunk would
+// get scheduled to start at that stale, now-meaningless future timestamp
+// instead of right away, producing an audible gap and a waveform
+// discontinuity (heard as a click/pop) at the seam once it finally starts.
+function resetPlaybackClock() {
+  const ctx = avatarAudioSink ? avatarAudioSink.audioCtx : playbackContext;
+  if (ctx) nextPlaybackTime = ctx.currentTime;
+}
+window.resetPlaybackClock = resetPlaybackClock;
 
 // --- Recording ---
 
@@ -173,7 +213,9 @@ function flushPcmBuffer(force) {
     const takeCount = force ? pcmBufferedSamples : CHUNK_SAMPLES;
     const toSend = combined.slice(0, takeCount);
     const remainder = combined.slice(takeCount);
-    ws.send(JSON.stringify({ type: 'audio_chunk', data: float32ToInt16Base64(toSend) }));
+    const b64 = float32ToInt16Base64(toSend);
+    pendingReplayChunks.push(b64);
+    ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }));
     pcmBuffer = remainder.length ? [remainder] : [];
     pcmBufferedSamples = remainder.length;
     if (force) break;
@@ -244,6 +286,54 @@ function ensureMicReady() {
   return micReadyPromise;
 }
 
+// --- Reconnect audio replay (defense-in-depth) ---
+// The backend now reconnects go_away and dropped-Gemini-session errors
+// in place without ever closing this browser websocket (see
+// live_session.py's module docstring), so under normal operation none of
+// this fires - the backend's own buffered-audio replay already covers
+// that case. This only matters for the rarer case where the BROWSER
+// socket itself drops mid-recording (a backend crash/restart, or the
+// network dropping outright): without it, whatever was already captured
+// but never confirmed with a turn_complete would be silently lost, and
+// the student would have to notice the tutor never replied and repeat
+// themselves. Only ever holds one turn's worth - a fresh press
+// (startRecording) always resets it, since replaying an abandoned turn
+// after the student has already moved on and started speaking again would
+// be confusing, not helpful.
+let pendingReplayChunks = [];
+
+function notifySocketClosed() {
+  if (!isRecording) return;
+  // The turn was still open when the socket died - turn_complete never
+  // went out. Fold in whatever's left in pcmBuffer (flushPcmBuffer only
+  // ever sends/records full CHUNK_SAMPLES-sized pieces, so a trailing
+  // partial chunk would otherwise be dropped from the replay) and stop
+  // "recording" locally, same UI state as a normal release.
+  isRecording = false;
+  talkBtn.classList.remove('recording');
+  talkHint.textContent = 'Hold to speak';
+  if (pcmBufferedSamples > 0) {
+    const combined = new Float32Array(pcmBufferedSamples);
+    let offset = 0;
+    for (const chunk of pcmBuffer) { combined.set(chunk, offset); offset += chunk.length; }
+    pendingReplayChunks.push(float32ToInt16Base64(combined));
+    pcmBuffer = [];
+    pcmBufferedSamples = 0;
+  }
+}
+
+function getPendingReplayTurn() {
+  return pendingReplayChunks.slice();
+}
+
+function clearPendingReplayTurn() {
+  pendingReplayChunks = [];
+}
+
+window.notifySocketClosed = notifySocketClosed;
+window.getPendingReplayTurn = getPendingReplayTurn;
+window.clearPendingReplayTurn = clearPendingReplayTurn;
+
 async function startRecording() {
   if (isRecording) return;
   if (quizActive) { showError('Finish or skip the quiz to use push-to-talk.'); return; }
@@ -266,6 +356,7 @@ async function startRecording() {
   noteConversationActivity();
   pcmBuffer = [];
   pcmBufferedSamples = 0;
+  pendingReplayChunks = []; // starting a new turn - any earlier undelivered turn is moot now
   isRecording = true;
   ws.send(JSON.stringify({ type: 'start_turn' }));
   talkBtn.classList.add('recording');
@@ -280,6 +371,7 @@ function stopRecording() {
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'turn_complete' }));
+    pendingReplayChunks = []; // turn completed normally - nothing left to replay
   }
   talkHint.textContent = 'Waiting for reply...';
 }

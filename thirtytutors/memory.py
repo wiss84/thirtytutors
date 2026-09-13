@@ -1,12 +1,29 @@
 """
-SQLite-backed conversation memory.
+SQLite-backed conversation memory and profile state.
 
-Two different access patterns are in play, so two stores are used rather
-than one: `data/profiles.json` keeps the small, frequently-rewritten
-metadata (profile identity, mic choice, which conversation is active) - that
-part lives in profiles_store.py. This module holds the growing,
-append-heavy memory data instead: per-profile conversations, each one's
-session-resumption state, its transcript turns, and a rolling summary.
+Two different stores hold profile-related data, split by how each piece
+changes over time rather than by what it's about:
+
+- `data/profiles.json` (profiles_store.py) holds identity and settings a
+  person edits deliberately and rarely through the UI - name, API key, mic
+  choice, backup preferences, and so on. profiles_store.py writes it
+  atomically (temp file + os.replace, with a rotating backup) - fine for
+  infrequent, deliberate writes.
+- This module (memory.db) holds everything else: the growing, append-heavy
+  conversation data (per-profile conversations, each one's
+  session-resumption state, its transcript turns, a rolling summary) AND,
+  via the `profile_state` table below, the small pieces of state the app
+  itself updates automatically and frequently in the background
+  (total_seconds_studied, last_active_date, current_streak,
+  seen_milestones, last_auto_backup_at). Those used to live in
+  profiles.json too, but being rewritten on nearly every session -
+  including right as the app is closing, see live_session.py's ws_session
+  `finally` block - made them the highest-risk fields for exactly the kind
+  of interrupted-write data loss that bit profiles.json before its writes
+  were made atomic. A killed process can lose at most SQLite's single
+  in-flight transaction, never corrupt the file as a whole the way a
+  truncate-then-write to a plain JSON file could.
+
 Transcripts are unbounded time-series that would force a full-file rewrite
 on every turn if kept in JSON; SQLite turns each turn into a cheap INSERT.
 
@@ -19,7 +36,7 @@ import json
 import sqlite3
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from .constants import DATA_DIR
 
@@ -34,6 +51,19 @@ def _connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
+    # WAL mode + synchronous=NORMAL: the standard pairing for a
+    # single-writer desktop app. Readers never block behind an
+    # in-progress write (a long-running live-session insert_turn/
+    # upsert_summary shouldn't stall a Settings modal's read), and a
+    # commit is still durable across an ordinary crash/force-close - only
+    # a genuine power-loss/OS-crash mid-checkpoint could lose the very
+    # last WAL-mode transaction, a far smaller and different risk than the
+    # profiles.json truncation bug this table's fields were moved here to
+    # avoid. journal_mode is persisted in the database file itself once
+    # set, so this PRAGMA is a cheap no-op on every connection after the
+    # very first.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -93,6 +123,15 @@ def init_db() -> None:
               ts TEXT,
               summary TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS profile_state (
+              profile_id TEXT PRIMARY KEY,
+              total_seconds_studied INTEGER NOT NULL DEFAULT 0,
+              last_active_date TEXT,
+              current_streak INTEGER NOT NULL DEFAULT 0,
+              seen_milestones_json TEXT NOT NULL DEFAULT '[]',
+              last_auto_backup_at TEXT
+            );
             """
         )
         # ALTER TABLE ADD COLUMN for installs whose vocab_mistakes predates
@@ -113,6 +152,209 @@ def init_db() -> None:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Profile state (stats/streak/milestones) - see this module's own docstring
+# for why this lives here rather than in profiles.json.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PROFILE_STATE = {
+    "total_seconds_studied": 0,
+    "last_active_date": None,
+    "current_streak": 0,
+    "seen_milestones": [],
+    "last_auto_backup_at": None,
+}
+
+
+def _row_to_profile_state(row: sqlite3.Row) -> dict:
+    return {
+        "total_seconds_studied": row["total_seconds_studied"],
+        "last_active_date": row["last_active_date"],
+        "current_streak": row["current_streak"],
+        "seen_milestones": json.loads(row["seen_milestones_json"]),
+        "last_auto_backup_at": row["last_auto_backup_at"],
+    }
+
+
+def _ensure_profile_state_row(conn: sqlite3.Connection, profile_id: str) -> None:
+    conn.execute(
+        "INSERT INTO profile_state (profile_id) VALUES (?) ON CONFLICT(profile_id) DO NOTHING",
+        (profile_id,),
+    )
+
+
+def get_profile_state(profile_id: str) -> dict:
+    """Stats/streak/milestone state for one profile - total_seconds_studied,
+    last_active_date, current_streak, seen_milestones, last_auto_backup_at.
+    Returns the all-zero/empty defaults for a profile with no row yet (a
+    brand new profile, or one that's simply never had any of these updated)
+    rather than None, so every caller can use the result directly without a
+    null check.
+    """
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT * FROM profile_state WHERE profile_id=?", (profile_id,)).fetchone()
+        return _row_to_profile_state(row) if row else dict(_DEFAULT_PROFILE_STATE)
+    finally:
+        conn.close()
+
+
+def record_active_day(profile_id: str, today: str) -> dict:
+    """Updates last_active_date/current_streak for a Live session starting
+    `today` (an ISO date string - see live_session.py's _record_active_day,
+    which just calls this instead of patching profiles.json directly). A
+    gap of exactly one day extends the streak; any other gap resets it to
+    1. A same-day call is a no-op (a same-day reconnect shouldn't
+    double-increment) and just returns the unchanged state. Runs as one
+    connection/transaction, so the read-then-write here can never
+    interleave with a concurrent update the way two separate profiles.json
+    load/save round trips could.
+
+    Returns {"last_active_date": ..., "current_streak": ...}.
+    """
+    conn = _connect()
+    try:
+        _ensure_profile_state_row(conn, profile_id)
+        row = conn.execute(
+            "SELECT last_active_date, current_streak FROM profile_state WHERE profile_id=?", (profile_id,)
+        ).fetchone()
+        last = row["last_active_date"]
+        if last == today:
+            return {"last_active_date": last, "current_streak": row["current_streak"]}
+        streak = 1
+        if last:
+            try:
+                gap = (date.fromisoformat(today) - date.fromisoformat(last)).days
+                if gap == 1:
+                    streak = (row["current_streak"] or 0) + 1
+            except ValueError:
+                pass  # malformed stored date (shouldn't happen) - treat as a fresh start rather than crash the session
+        conn.execute(
+            "UPDATE profile_state SET last_active_date=?, current_streak=? WHERE profile_id=?",
+            (today, streak, profile_id),
+        )
+        conn.commit()
+        return {"last_active_date": today, "current_streak": streak}
+    finally:
+        conn.close()
+
+
+def add_seconds_studied(profile_id: str, seconds: int) -> None:
+    """Atomically increments total_seconds_studied by `seconds` via a single
+    SQL UPDATE ... SET x = x + ? - never a read-then-write, so this can't
+    lose a concurrent update the way the old profiles.json version needed a
+    defensive re-fetch-before-patch to avoid (see this function's previous
+    home in live_session.py's ws_session `finally` block).
+    """
+    if seconds <= 0:
+        return
+    conn = _connect()
+    try:
+        _ensure_profile_state_row(conn, profile_id)
+        conn.execute(
+            "UPDATE profile_state SET total_seconds_studied = total_seconds_studied + ? WHERE profile_id=?",
+            (seconds, profile_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_seen_milestones(profile_id: str, milestone_ids: set[str]) -> None:
+    """Merges `milestone_ids` into the stored seen_milestones set (see
+    stats.get_new_milestones, the only caller) - a plain union, since a
+    milestone once seen should never become unseen.
+    """
+    if not milestone_ids:
+        return
+    conn = _connect()
+    try:
+        _ensure_profile_state_row(conn, profile_id)
+        row = conn.execute("SELECT seen_milestones_json FROM profile_state WHERE profile_id=?", (profile_id,)).fetchone()
+        seen = set(json.loads(row["seen_milestones_json"])) | milestone_ids
+        conn.execute(
+            "UPDATE profile_state SET seen_milestones_json=? WHERE profile_id=?",
+            (json.dumps(sorted(seen)), profile_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_last_auto_backup_at(profile_id: str, timestamp: str) -> None:
+    conn = _connect()
+    try:
+        _ensure_profile_state_row(conn, profile_id)
+        conn.execute(
+            "UPDATE profile_state SET last_auto_backup_at=? WHERE profile_id=?",
+            (timestamp, profile_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_profile_state(profile_id: str, state: dict) -> None:
+    """Upserts a full profile_state row verbatim - used only by backup.py's
+    import path to restore stats/streak/milestone history from a backup
+    manifest (see build_profile_backup_zip, which merges this same shape
+    into the exported profile dict). Fully replaces any existing row for
+    this profile_id, matching upsert_profile's own fully-replace semantics
+    for the profiles.json side of a restored profile.
+    """
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO profile_state
+                 (profile_id, total_seconds_studied, last_active_date, current_streak,
+                  seen_milestones_json, last_auto_backup_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(profile_id) DO UPDATE SET
+                 total_seconds_studied=excluded.total_seconds_studied,
+                 last_active_date=excluded.last_active_date,
+                 current_streak=excluded.current_streak,
+                 seen_milestones_json=excluded.seen_milestones_json,
+                 last_auto_backup_at=excluded.last_auto_backup_at""",
+            (
+                profile_id,
+                state.get("total_seconds_studied") or 0,
+                state.get("last_active_date"),
+                state.get("current_streak") or 0,
+                json.dumps(state.get("seen_milestones") or []),
+                state.get("last_auto_backup_at"),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_profile_state(profile_id: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM profile_state WHERE profile_id=?", (profile_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def profile_state_row_exists(profile_id: str) -> bool:
+    """True only if profile_id has an actual row in profile_state - distinct
+    from get_profile_state's all-zero DEFAULTS, which it also returns for a
+    profile that's simply never had anything recorded yet. Used only by
+    profiles_store.migrate_legacy_profile_state, which needs to tell
+    "never touched, safe to migrate stale profiles.json data into" apart
+    from "already has real (possibly genuinely all-zero) state" - the
+    latter must never be overwritten by a migration re-running on a later
+    startup.
+    """
+    conn = _connect()
+    try:
+        return conn.execute("SELECT 1 FROM profile_state WHERE profile_id=?", (profile_id,)).fetchone() is not None
+    finally:
+        conn.close()
 
 
 def default_conversation_name(config: dict) -> str:
@@ -399,7 +641,7 @@ def record_term_review(conversation_id: str, term: str, correct: bool) -> None:
         conn.close()
 
 
-def get_review_candidates(conversation_id: str, limit: int = 5) -> list[str]:
+def get_review_candidates(conversation_id: str, limit: int = 20) -> list[str]:
     """Terms worth quizzing again: missed at least once and not yet answered
     correctly twice in a row since, most-missed and least-recently-seen
     first. Two correct answers in a row for a term retires it from this
@@ -409,6 +651,32 @@ def get_review_candidates(conversation_id: str, limit: int = 5) -> list[str]:
         rows = conn.execute(
             "SELECT term FROM vocab_mistakes WHERE conversation_id=? AND correct_streak<2 "
             "ORDER BY occurrences DESC, last_seen_ts ASC LIMIT ?",
+            (conversation_id, limit),
+        ).fetchall()
+        return [r["term"] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_taught_vocab(conversation_id: str, limit: int = 2000) -> list[str]:
+    """Every distinct vocabulary term/phrase surfaced by summarization for
+    this conversation (see upsert_vocab_mistake), most recently taught or
+    reinforced first, capped at `limit`. Unlike get_review_candidates above
+    (a small subset - terms still shaky, worth re-quizzing), this is the
+    FULL running vocabulary list.
+
+    Injected into a fresh session's system instruction (see
+    tutor_instructions.TAUGHT_VOCAB_CONTEXT_TEMPLATE) as a durable, non-
+    lossy record of what's already been taught, instead of relying only on
+    the rolling summary's prose - that summary re-compresses on every fold
+    (see SUMMARY_FOLD_EVERY_N_TURNS) and can drop earlier vocabulary
+    mentions over many sessions, even though the terms themselves are still
+    sitting right here in vocab_mistakes the whole time.
+    """
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT term FROM vocab_mistakes WHERE conversation_id=? ORDER BY last_seen_ts DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()
         return [r["term"] for r in rows]

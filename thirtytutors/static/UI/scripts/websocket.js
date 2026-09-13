@@ -25,10 +25,27 @@ let lastCloseKind = null; // null | 'network' | 'rate_limit'
 let backoffMs = 3000;
 const BACKOFF_CAP_MS = 30000;
 let onlineListenerAttached = false;
+let consecutiveFailures = 0;
+const FAST_RETRY_ATTEMPTS = 2;
 
 function connectWebSocket() {
   setConnectionState('connecting');
   setModelLampState('connecting');
+
+  // Tear down any previous socket first. Without this, calling
+  // connectWebSocket() again while an old connection is still technically
+  // open (the Retry button, or the 'online' event short-circuit below)
+  // would abandon it without ever closing it - the server-side
+  // ws_session() handler for that orphaned connection keeps running
+  // indefinitely (still holding a live Gemini connection, still consuming
+  // API quota) since nothing ever told it the client gave up on it.
+  // manualClose=true first so the orphaned socket's own onclose doesn't
+  // ALSO try to schedule a competing reconnect on top of the fresh one
+  // this function is about to create.
+  if (ws) {
+    ws.manualClose = true;
+    ws.close();
+  }
 
   // Each socket tracks its own manualClose flag and is compared against the
   // current `ws` before acting on any event, instead of relying on one
@@ -42,7 +59,7 @@ function connectWebSocket() {
   socket.onopen = () => {
     if (socket !== ws) return; // superseded by a newer connection
     setConnectionState('connected');
-    showError('');
+    hideStatusToast();
     // voice_name/native_language/target_language/model_name are omitted -
     // with a profile_id and conversation_id given, the server always uses
     // its own stored config for that conversation (see ws_session in
@@ -65,15 +82,35 @@ function connectWebSocket() {
     if (handsFreeActive) {
       socket.send(JSON.stringify({ type: 'handsfree_start' }));
     }
+    // Defense-in-depth for the rare case where the BROWSER socket itself
+    // dropped mid-recording (see audio.js's "Reconnect audio replay"
+    // section) - the backend's own go_away/error reconnect never closes
+    // this socket at all, so this is only ever non-empty after something
+    // more unusual (a backend restart/crash, or the network dropping
+    // outright) killed the connection while a turn was still open.
+    if (window.getPendingReplayTurn) {
+      const chunks = window.getPendingReplayTurn();
+      if (chunks.length) {
+        socket.send(JSON.stringify({ type: 'start_turn' }));
+        for (const data of chunks) {
+          socket.send(JSON.stringify({ type: 'audio_chunk', data }));
+        }
+        socket.send(JSON.stringify({ type: 'turn_complete' }));
+        window.clearPendingReplayTurn();
+      }
+    }
   };
 
   socket.onclose = () => {
     if (socket !== ws) return; // stale socket already superseded - don't double-reconnect
     setConnectionState('error');
     setModelLampState('connecting');
+    if (window.notifySocketClosed) window.notifySocketClosed();
     if (socket.manualClose) return;
 
-    if (lastCloseKind) {
+    consecutiveFailures++;
+
+    if (lastCloseKind || consecutiveFailures > FAST_RETRY_ATTEMPTS) {
       reconnectTimer = setTimeout(connectWebSocket, backoffMs);
       backoffMs = Math.min(backoffMs * 2, BACKOFF_CAP_MS);
       if (lastCloseKind === 'network' && !onlineListenerAttached) {
@@ -98,8 +135,25 @@ function connectWebSocket() {
     const msg = JSON.parse(event.data);
     if (msg.type === 'audio') {
       playAudioChunk(msg.data);
+    } else if (msg.type === 'interrupted') {
+      // Deliberately no client action. This is Gemini's signal that the
+      // response in progress got cut short - normally meaning the user
+      // started talking over it, but Google's own docs note it can also
+      // fire with no client-side cause at all ("phantom interrupt"). This
+      // app's mic never forwards audio to Gemini while the tutor is
+      // speaking in either mode (push-to-talk is gated on
+      // isTutorSpeaking(); hands-free drops audio the same way - see
+      // audio.js), so a genuine barge-in can't happen here - acting on
+      // this signal would only ever be truncating the tutor's speech in
+      // response to a phantom trigger.
     } else if (msg.type === 'transcript_in') {
-      appendOrCreateBubble('mine', msg.text);
+      // Deliberately not rendered - see transcript.js's renderConversationTranscript
+      // for the matching change on the history-reload path, and the reasoning
+      // (Gemini's own input_audio_transcription is frequently badly garbled for
+      // non-native/accented speech, unrelated to whether the model actually
+      // understood the audio correctly - showing it was more confusing than
+      // useful). The message itself still arrives and is still stored/
+      // summarized exactly as before - this only skips the UI bubble.
     } else if (msg.type === 'transcript_out') {
       appendOrCreateBubble('tutor', msg.text);
     } else if (msg.type === 'turn_complete') {
@@ -115,14 +169,30 @@ function connectWebSocket() {
     } else if (msg.type === 'session_status') {
       showSessionStatus(msg.resumed);
       setModelLampState(msg.unavailable ? 'unavailable' : 'connected', msg.model_name);
+      if (window.resetPlaybackClock) window.resetPlaybackClock();
       // A real, available session_status means the server actually
       // connected to a model - even if we were mid-backoff a moment ago,
-      // we're demonstrably past whatever was failing now.
-      if (!msg.unavailable) { lastCloseKind = null; backoffMs = 3000; }
+      // we're demonstrably past whatever was failing now. Also clears any
+      // lingering error/waiting toast (e.g. the "didn't respond in time -
+      // reconnecting..." stalled-watchdog message) - this fires on every
+      // successful reconnect INCLUDING the in-place server-side kind this
+      // app relies on for go_away/mid-session errors, where the browser's
+      // own socket never actually closes and so onopen (which does the
+      // same hideStatusToast() for a fresh socket) never fires again to
+      // clear it. Without this, a toast shown for a since-recovered error
+      // could sit there indefinitely with nothing left to retry.
+      if (!msg.unavailable) {
+        lastCloseKind = null;
+        backoffMs = 3000;
+        consecutiveFailures = 0;
+        hideStatusToast();
+      }
+    } else if (msg.type === 'waiting_long') {
+      showWaitingIndicator(msg.active);
     } else if (msg.type === 'error') {
-      showError(msg.message);
-      // Purely a UI banner (see transcript.js's showError) - this is never
-      // written to the transcript or memory.py.
+      showStatusToast(msg.message, 'error', true);
+      // Purely a UI toast (see transcript.js's showStatusToast) - this is
+      // never written to the transcript or memory.py.
       lastCloseKind = (msg.kind === 'network' || msg.kind === 'rate_limit') ? msg.kind : null;
     }
   };

@@ -34,6 +34,8 @@ const settingsNativeLanguageInput = document.getElementById('settingsNativeLangu
 const settingsGeneralStatus = document.getElementById('settingsGeneralStatus');
 const settingsSaveGeneralBtn = document.getElementById('settingsSaveGeneralBtn');
 
+attachLanguageAutocomplete(settingsNativeLanguageInput);
+
 // Account
 const settingsApiKeyInput = document.getElementById('settingsApiKeyInput');
 const settingsToggleApiKeyBtn = document.getElementById('settingsToggleApiKeyBtn');
